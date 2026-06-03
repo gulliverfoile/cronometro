@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>El Reloj del Sofá (TUSE)</title>
+  <style>
+    /* --------------------------------------------------------- *
+     * CAPA DE PRESENTACIÓN (Adaptador Visual)
+     * Estilo mínimo, limpio, preparado para personalizar.
+     * --------------------------------------------------------- */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0f172a; color: #e2e8f0;
+      display: flex; justify-content: center; align-items: center;
+      min-height: 100vh; padding: 20px;
+    }
+    .container { max-width: 600px; width: 100%; }
+
+    /* Reloj vivo (inspirado en el "Cubo del Sofá") */
+    .reloj {
+      width: 180px; height: 180px; border-radius: 50%;
+      margin: 0 auto 30px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 2.5rem; font-weight: bold;
+      background: radial-gradient(circle at 30% 30%, #334155, #1e293b);
+      box-shadow: 0 0 40px rgba(99, 102, 241, 0.3);
+      transition: all 0.5s ease;
+    }
+    .reloj.flujo { box-shadow: 0 0 60px rgba(34, 197, 94, 0.5); border: 3px solid #22c55e; }
+    .reloj.alerta { box-shadow: 0 0 60px rgba(239, 68, 68, 0.5); border: 3px solid #ef4444; animation: agitar 0.3s infinite; }
+    @keyframes agitar { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+
+    /* Botones de aplicaciones (lunas orbitando) */
+    .apps { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-bottom: 20px; }
+    .app-btn {
+      background: #1e293b; border: 1px solid #475569;
+      color: #cbd5e1; padding: 12px 20px; border-radius: 40px;
+      cursor: pointer; font-size: 1rem; transition: 0.2s;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .app-btn.activo { background: #312e81; border-color: #818cf8; transform: scale(1.05); }
+    .app-btn .tiempo { font-size: 0.8rem; opacity: 0.7; }
+
+    /* Zona de metáforas (avisos) */
+    .metafora {
+      background: #1e293b; border-left: 4px solid #f59e0b;
+      padding: 15px 20px; border-radius: 10px;
+      margin: 15px 0; font-style: italic; opacity: 0; transform: translateY(10px);
+      transition: 0.4s; pointer-events: none;
+    }
+    .metafora.visible { opacity: 1; transform: translateY(0); pointer-events: auto; }
+
+    /* Micro-pregunta subjetiva */
+    .pregunta { display: none; text-align: center; margin: 20px 0; }
+    .pregunta.visible { display: block; }
+    .emociones { display: flex; gap: 10px; justify-content: center; margin-top: 10px; }
+    .emocion {
+      background: #1e293b; border: 1px solid #475569; color: #e2e8f0;
+      padding: 10px 18px; border-radius: 30px; cursor: pointer;
+    }
+
+    /* Resumen final */
+    .resumen { display: none; background: #1e293b; border-radius: 16px; padding: 20px; margin-top: 30px; }
+    .resumen.visible { display: block; }
+    .resumen h2 { margin-bottom: 15px; }
+
+    /* Controles */
+    .controles { display: flex; gap: 10px; justify-content: center; margin: 15px 0; }
+    .btn { padding: 10px 20px; border-radius: 30px; border: none; cursor: pointer; background: #475569; color: #e2e8f0; }
+    .btn.primario { background: #6366f1; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <!-- Reloj vivo: representa el estado del tiempo interno -->
+  <div class="reloj" id="reloj">00:00</div>
+
+  <!-- Botones de aplicaciones (se generan dinámicamente) -->
+  <div class="apps" id="appsContainer"></div>
+
+  <!-- Metáfora emergente (aviso configurable) -->
+  <div class="metafora" id="metafora"></div>
+
+  <!-- Pregunta de percepción subjetiva al cambiar de app -->
+  <div class="pregunta" id="pregunta">
+    <p>¿Cómo se pasó el tiempo en <strong id="appSalida"></strong>?</p>
+    <div class="emociones">
+      <button class="emocion" data-percepcion="breve">⚡ Voló</button>
+      <button class="emocion" data-percepcion="normal">🕒 Normal</button>
+      <button class="emocion" data-percepcion="eterno">🐌 Eterno</button>
+    </div>
+  </div>
+
+  <!-- Controles -->
+  <div class="controles">
+    <button class="btn primario" id="btnTerminar">Terminar día</button>
+    <button class="btn" id="btnExportar">Exportar JSON</button>
+  </div>
+
+  <!-- Resumen visual (comparativa) -->
+  <div class="resumen" id="resumen"></div>
+</div>
+
+<script>
+/* --------------------------------------------------------- *
+ * DOMINIO (Lógica de negocio pura - Intención Fuerte de TUSE)
+ * Clases independientes de la UI, preparadas para hexagonal.
+ * --------------------------------------------------------- */
+
+/**
+ * Puerto de persistencia (abstracción).
+ * En esta implementación usa localStorage, pero se puede cambiar.
+ */
+class RepositorioSesiones {
+  guardar(clave, valor) {
+    localStorage.setItem(clave, JSON.stringify(valor));
+  }
+  cargar(clave) {
+    const dato = localStorage.getItem(clave);
+    return dato ? JSON.parse(dato) : null;
+  }
+}
+
+/**
+ * Perfil de intención por aplicación.
+ * Define el tipo de relación que el usuario quiere con esa app.
+ */
+const PERFIL = {
+  QUIERO_MAS: 'quiero_mas',
+  QUIERO_MENOS: 'quiero_menos',
+  SOLO_OBSERVAR: 'solo_observar'
+};
+
+/**
+ * Configuración de una aplicación monitorizada.
+ */
+class Aplicacion {
+  /**
+   * @param {string} nombre
+   * @param {string} perfil - PERFIL.QUIERO_MAS, PERFIL.QUIERO_MENOS, PERFIL.SOLO_OBSERVAR
+   * @param {number} limiteSegundos - Umbral para considerar aviso (0 = sin límite)
+   * @param {string} intencion - Descripción de la intención para el resumen
+   */
+  constructor(nombre, perfil = PERFIL.SOLO_OBSERVAR, limiteSegundos = 0, intencion = '') {
+    this.nombre = nombre;
+    this.perfil = perfil;
+    this.limiteSegundos = limiteSegundos;
+    this.intencion = intencion || this._intencionPorDefecto();
+  }
+
+  _intencionPorDefecto() {
+    if (this.perfil === PERFIL.QUIERO_MAS) return `Dedicar tiempo de calidad a ${this.nombre}`;
+    if (this.perfil === PERFIL.QUIERO_MENOS) return `Limitar el tiempo en ${this.nombre}`;
+    return `Observar cuánto tiempo paso en ${this.nombre}`;
+  }
+}
+
+/**
+ * Registro de una percepción subjetiva.
+ */
+class Percepcion {
+  /**
+   * @param {string} appNombre
+   * @param {number} duracionReal - segundos
+   * @param {string} etiqueta - 'breve', 'normal', 'eterno'
+   */
+  constructor(appNombre, duracionReal, etiqueta) {
+    this.appNombre = appNombre;
+    this.duracionReal = duracionReal;
+    this.etiqueta = etiqueta;
+    this.instante = new Date().toISOString();
+  }
+}
+
+/**
+ * Generador de metáforas (avisos no conductistas, pura señal).
+ * Soporta diferentes estilos de tono.
+ */
+class GeneradorMetaforas {
+  constructor(estilo = 'amable') {
+    this.estilo = estilo;
+  }
+
+  generar(app, tiempoExcedido, perfil) {
+    const minutos = Math.floor(tiempoExcedido / 60);
+    // Selección de metáfora según perfil y magnitud
+    if (perfil === PERFIL.QUIERO_MENOS) {
+      return this._metaforaExceso(app.nombre, minutos);
+    } else if (perfil === PERFIL.QUIERO_MAS) {
+      return this._metaforaRefuerzo(app.nombre, minutos);
+    }
+    return null; // Solo observar no genera avisos automáticos
+  }
+
+  _metaforaExceso(nombre, minutos) {
+    const opciones = [
+      `En ${nombre} llevas el tiempo de cocer un huevo perfecto.`,
+      `${nombre} ya te ha robado el tiempo de un capítulo de serie mala.`,
+      `Si estuvieras en la ISS, en ${nombre} habrías envejecido 0.0000001 segundos menos. Pero no.`,
+      `Llevas en ${nombre} tanto que la luz ya recorrió ${minutos * 18_000_000} km mientras tanto.`
+    ];
+    return opciones[Math.min(minutos, opciones.length - 1)] || opciones[opciones.length - 1];
+  }
+
+  _metaforaRefuerzo(nombre, minutos) {
+    return `¡Bien! Llevas ${minutos} min en ${nombre}. El tiempo bien invertido sabe dulce.`;
+  }
+}
+
+/**
+ * Motor de dominio: coordina el estado temporal, las percepciones y los avisos.
+ * Es la "Intención Fuerte" del sistema.
+ */
+class MonitorDominio {
+  constructor(aplicaciones, repositorio, estiloMensajes = 'amable') {
+    this.aplicaciones = new Map();         // nombre -> Aplicacion
+    this.tiempos = new Map();              // nombre -> segundos acumulados
+    this.percepciones = [];
+    this.repositorio = repositorio;
+    this.generador = new GeneradorMetaforas(estiloMensajes);
+
+    this.appActual = null;
+    this.ultimoTick = Date.now();
+    this.alertasEmitidas = new Set();      // evitar repetir avisos en misma sesión
+
+    // Inicializar aplicaciones desde configuración
+    aplicaciones.forEach(app => {
+      this.aplicaciones.set(app.nombre, app);
+      this.tiempos.set(app.nombre, 0);
+    });
+
+    this._cargarEstado();
+    this._iniciarRelojInterno();
+  }
+
+  /** Carga estado previo desde persistencia (si existe). */
+  _cargarEstado() {
+    const guardado = this.repositorio.cargar('estadoSesion');
+    if (guardado) {
+      this.tiempos = new Map(Object.entries(guardado.tiempos));
+      this.appActual = guardado.appActual;
+      this.percepciones = guardado.percepciones.map(p => new Percepcion(p.appNombre, p.duracionReal, p.etiqueta));
+    }
+  }
+
+  /** Guarda el estado actual para recuperación entre recargas. */
+  _guardarEstado() {
+    const estado = {
+      tiempos: Object.fromEntries(this.tiempos),
+      appActual: this.appActual,
+      percepciones: this.percepciones
+    };
+    this.repositorio.guardar('estadoSesion', estado);
+  }
+
+  /** Inicia el latido interno que acumula tiempo (cada segundo). */
+  _iniciarRelojInterno() {
+    setInterval(() => {
+      if (!this.appActual) return;
+      const ahora = Date.now();
+      const delta = (ahora - this.ultimoTick) / 1000;
+      this.ultimoTick = ahora;
+      const nuevoTiempo = (this.tiempos.get(this.appActual) || 0) + delta;
+      this.tiempos.set(this.appActual, nuevoTiempo);
+      this._guardarEstado();
+    }, 1000);
+  }
+
+  /** Cambia la aplicación activa. Devuelve la app saliente para preguntar percepción. */
+  cambiarApp(nuevaApp) {
+    const appSaliente = this.appActual;
+    this.appActual = nuevaApp;
+    this.ultimoTick = Date.now();
+    this._guardarEstado();
+    return appSaliente;  // Para que la UI pregunte si quiere
+  }
+
+  /** Registra una percepción subjetiva sobre la última sesión en una app. */
+  registrarPercepcion(appNombre, etiqueta) {
+    const duracion = this.tiempos.get(appNombre) || 0;
+    if (duracion <= 0) return;
+    this.percepciones.push(new Percepcion(appNombre, duracion, etiqueta));
+    this._guardarEstado();
+  }
+
+  /** Verifica si la app actual supera algún límite configurado. Retorna metáfora o null. */
+  verificarLimite(appNombre) {
+    const app = this.aplicaciones.get(appNombre);
+    if (!app || app.limiteSegundos <= 0) return null;
+    const tiempo = this.tiempos.get(appNombre) || 0;
+    if (tiempo > app.limiteSegundos && !this.alertasEmitidas.has(appNombre)) {
+      this.alertasEmitidas.add(appNombre);
+      const excedido = tiempo - app.limiteSegundos;
+      return this.generador.generar(app, excedido, app.perfil);
+    }
+    return null;
+  }
+
+  /** Genera resumen comparativo final (objetivo vs subjetivo). */
+  generarResumen() {
+    const filas = [];
+    for (const [nombre, tiempo] of this.tiempos.entries()) {
+      if (tiempo <= 0) continue;
+      const app = this.aplicaciones.get(nombre);
+      const perfs = this.percepciones.filter(p => p.appNombre === nombre);
+      const ultimaPercepcion = perfs.length > 0 ? perfs[perfs.length - 1].etiqueta : 'sin registro';
+      const perfilTexto = app ? app.perfil : PERFIL.SOLO_OBSERVAR;
+      filas.push({
+        app: nombre,
+        tiempoSegundos: tiempo,
+        perfil: perfilTexto,
+        intencion: app ? app.intencion : '',
+        ultimaPercepcion
+      });
+    }
+    return filas;
+  }
+
+  /** Exporta los datos a un objeto JSON descargable. */
+  exportarJSON() {
+    return {
+      tiempos: Object.fromEntries(this.tiempos),
+      percepciones: this.percepciones,
+      exportado: new Date().toISOString()
+    };
+  }
+}
+
+/* --------------------------------------------------------- *
+ * ADAPTADORES (Conexión con el DOM y eventos)
+ * --------------------------------------------------------- */
+
+/** Orquestador de la UI. Escucha eventos y habla con el dominio. */
+class CronometroUIManager {
+  constructor(dominio, aplicaciones) {
+    this.dominio = dominio;
+    this.aplicaciones = aplicaciones; // array de Aplicacion
+    this.preguntaActiva = false;
+    this.appSalientePendiente = null;
+
+    this._inicializarUI();
+    this._enlazarEventos();
+    this._mostrarEstadoInicial();
+  }
+
+  _inicializarUI() {
+    const container = document.getElementById('appsContainer');
+    container.innerHTML = '';
+    this.aplicaciones.forEach(app => {
+      const btn = document.createElement('button');
+      btn.className = 'app-btn';
+      btn.dataset.app = app.nombre;
+      btn.innerHTML = `${app.nombre} <span class="tiempo">0min</span>`;
+      container.appendChild(btn);
+    });
+  }
+
+  _enlazarEventos() {
+    // Botones de apps
+    document.querySelectorAll('.app-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const nombre = e.currentTarget.dataset.app;
+        this._cambiarAApp(nombre);
+      });
+    });
+
+    // Emociones (percepción subjetiva)
+    document.querySelectorAll('.emocion').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const etiqueta = e.currentTarget.dataset.percepcion;
+        this._registrarYContinuar(etiqueta);
+      });
+    });
+
+    // Terminar día
+    document.getElementById('btnTerminar').addEventListener('click', () => {
+      this._mostrarResumen();
+    });
+
+    // Exportar JSON
+    document.getElementById('btnExportar').addEventListener('click', () => {
+      const json = this.dominio.exportarJSON();
+      const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'resumen_sofa.json'; a.click();
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  _mostrarEstadoInicial() {
+    this._actualizarRelojVisual();
+    this._actualizarBotonesActivos();
+  }
+
+  _cambiarAApp(nuevaApp) {
+    const appSaliente = this.dominio.cambiarApp(nuevaApp);
+    this._actualizarBotonesActivos();
+
+    // Verificar si la nueva app genera metáfora por límite
+    const metafora = this.dominio.verificarLimite(nuevaApp);
+    if (metafora) this._mostrarMetafora(metafora);
+
+    // Preguntar percepción sobre la app saliente
+    if (appSaliente && !this.preguntaActiva) {
+      this._preguntarPercepcion(appSaliente);
+    } else {
+      this._ocultarPregunta();
+    }
+  }
+
+  _preguntarPercepcion(appSaliente) {
+    this.preguntaActiva = true;
+    this.appSalientePendiente = appSaliente;
+    document.getElementById('appSalida').textContent = appSaliente;
+    document.getElementById('pregunta').classList.add('visible');
+  }
+
+  _registrarYContinuar(etiqueta) {
+    if (this.appSalientePendiente) {
+      this.dominio.registrarPercepcion(this.appSalientePendiente, etiqueta);
+      this.appSalientePendiente = null;
+    }
+    this.preguntaActiva = false;
+    this._ocultarPregunta();
+  }
+
+  _ocultarPregunta() {
+    document.getElementById('pregunta').classList.remove('visible');
+    this.preguntaActiva = false;
+  }
+
+  _mostrarMetafora(texto) {
+    const el = document.getElementById('metafora');
+    el.textContent = `⏳ ${texto}`;
+    el.classList.add('visible');
+    setTimeout(() => el.classList.remove('visible'), 8000);
+  }
+
+  _actualizarBotonesActivos() {
+    document.querySelectorAll('.app-btn').forEach(btn => {
+      btn.classList.toggle('activo', btn.dataset.app === this.dominio.appActual);
+    });
+  }
+
+  _actualizarRelojVisual() {
+    const reloj = document.getElementById('reloj');
+    const actual = this.dominio.appActual;
+    const tiempo = actual ? this.dominio.tiempos.get(actual) || 0 : 0;
+    const mins = Math.floor(tiempo / 60);
+    const segs = Math.floor(tiempo % 60);
+    reloj.textContent = `${String(mins).padStart(2, '0')}:${String(segs).padStart(2, '0')}`;
+
+    // Cambiar clase según perfil
+    reloj.classList.remove('flujo', 'alerta');
+    if (actual) {
+      const app = this.dominio.aplicaciones.get(actual);
+      if (app && app.perfil === PERFIL.QUIERO_MAS) reloj.classList.add('flujo');
+      if (app && app.perfil === PERFIL.QUIERO_MENOS && tiempo > (app.limiteSegundos || Infinity)) {
+        reloj.classList.add('alerta');
+      }
+    }
+    requestAnimationFrame(() => this._actualizarRelojVisual());
+  }
+
+  _mostrarResumen() {
+    const resumen = this.dominio.generarResumen();
+    const contenedor = document.getElementById('resumen');
+    let html = '<h2>📊 Resumen de tu día</h2><ul>';
+    resumen.forEach(fila => {
+      const minutos = Math.floor(fila.tiempoSegundos / 60);
+      html += `<li><strong>${fila.app}</strong>: ${minutos} min — Perfil: ${fila.perfil}. Última percepción: ${fila.ultimaPercepcion}. Intención: ${fila.intencion}</li>`;
+    });
+    html += '</ul><p><em>“No es que tengas poco tiempo, es que inviertes mucho en lo que no eliges.”</em></p>';
+    contenedor.innerHTML = html;
+    contenedor.classList.add('visible');
+  }
+}
+
+/* --------------------------------------------------------- *
+ * CONFIGURACIÓN Y ARRANQUE (Punto de entrada)
+ * --------------------------------------------------------- */
+
+// Definir las aplicaciones con su perfil, límite e intención personalizable
+const appsConfig = [
+  new Aplicacion('Editor', PERFIL.QUIERO_MAS, 0, 'Dedica tiempo profundo a crear'),
+  new Aplicacion('Navegador', PERFIL.SOLO_OBSERVAR, 0, 'Navegar con propósito'),
+  new Aplicacion('Redes', PERFIL.QUIERO_MENOS, 30, 'No más de 30 minutos al día'),
+  new Aplicacion('Correo', PERFIL.QUIERO_MENOS, 20, 'Solo lo necesario')
+];
+
+const repo = new RepositorioSesiones();
+const estiloInicial = 'amable';   // neutro, amable, sarcástico, estoico
+const dominio = new MonitorDominio(appsConfig, repo, estiloInicial);
+const ui = new CronometroUIManager(dominio, appsConfig);
+</script>
+</body>
+</html>
